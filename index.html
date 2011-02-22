@@ -1,0 +1,784 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+	<title>Meijster distance</title>
+	<link rel='stylesheet' href='distance.css' type='text/css' />
+</head>
+<body>
+	<div id='bezel'>
+		<div id='brush'>
+			<canvas id='brush-shape'></canvas>
+			<div id='brush-name'>BrushName</div>
+		</div>
+	</div>
+
+	<div id='panel'>
+		<div id='ui-distance'>
+			<table style='width: 100%; ' cellPadding='0' cellSpacing='0'><tr>
+				<td>
+					<button onclick='switchDistanceMethodTo("EDT")'>Euclidean</button><br>
+					<button onclick='switchDistanceMethodTo("MDT")'>Manhattan</button><br>
+					<button onclick='switchDistanceMethodTo("CDT")'>Chessboard</button><br>
+					<button onclick='switchDistanceMethodTo("all")'>All 3</button><br>
+				<td>
+					<table cellPadding='0' cellSpacing='0'>
+<!--
+			<input id='input-negative' type='checkbox'><label for='input-negative'>Negative</label><br>
+-->		
+						<tr><td><input id='input-silhouette' type='checkbox'><label for='input-silhouette'>Silhouette</label></td></tr>
+						<tr><td><input id='input-isolines' type='checkbox'><label for='input-isolines'>Isolines</label></td>
+							<td><input id='input-isoline-width' type='range' min='2' max='100'>
+								<input id='input-isoline-offset' type='range' min='0' max='100' style='display: none'></td>
+							<td><input id='input-isoline-cycle' type='checkbox'><label for='input-isoline-cycle'>Cycle</label></td></tr>
+						<tr><td><input id='input-stroke' type='checkbox'><label for='input-stroke'>Stroke</label></td>
+							<td><input id='input-stroke-width' type='range' min='1' max='100'></td></tr>
+					</table>
+
+				<td>
+					<table cellPadding='0' cellSpacing='0'>
+						<tr><td>Contrast</td><td><input id='input-contrast' type='range' min='30' max='600'></td></tr>
+						<tr><td>Brushes</td><td><table cellPadding='0' cellSpacing='0' id='brushes-palette'><tr></tr></table></td></tr>
+						<tr><td>Brush size</td><td><input id='input-brush-size' type='range' min='3' max='130'></td></tr>
+					</table>
+					
+				<!-- Images container : last td sized to 100%, one div inside position: relative width: 100%, images div in it in position absolute -->
+				<td style='width: 100%; vertical-align: top'>
+					<div style='position: relative'>
+						<div id='images' style='position: absolute; width: 100%;' ondragenter="return false" ondragover="return false" ondrop="drop(event)">
+							<img src='images/drop.png' onclick='dropMessage()'>
+						</div>
+					</div>
+				</td></tr>
+			</table>
+		</div>
+	</div>
+	<div id='distance'>
+		<!-- Size initial height to eagle -->
+		<div><span>Euclidean</span><canvas height='510'></canvas></div>
+		<div><span>Manhattan</span><canvas></canvas></div>
+		<div><span>Chessboard</span><canvas></canvas></div>
+		<div><span>Original</span>
+			<!-- Load an image then paint it in this canvas to access its bitmap data -->
+			<img id='sourceImage' /><canvas id='imageCanvas'></canvas>
+			</div>
+	</div>
+	<div id='log'></div>
+	
+	<script>
+	
+	
+	
+
+		//
+		// 
+		// Distance
+		// 
+		// 
+		
+		// Make a boolean image b from input canvas (1=foreground, 0=background)
+		function	booleanImageFromCanvas(canvas, threshold, negative)	{
+			var m		= canvas.width
+			var n		= canvas.height
+			var data	= canvas.getContext('2d').getImageData(0, 0, m, n).data
+			var infinity= (m+n)
+			var idx		= 0
+			var booleanImage	= new Array(m*n)
+			for (var j=0; j<n; j++)	{
+				for (var i=0; i<m; i++)	{
+					var c = data[idx*4] < threshold ? 1 : 0
+					booleanImage[idx] = negative ? 1-c : c
+					idx++
+				}
+			}
+			return booleanImage
+		}
+		
+		// Meijster distance
+		//	method : 'EDT' (Euclidean) 'MDT' (Manhattan) 'CDT' (Chessboard)
+		//	Everything is integer math, hence Math.floor()
+		function	distanceFromBooleanImage(booleanImage, m, n, method) {
+			// First phase
+			var infinity = m+n
+			var b = booleanImage
+			var g = new Array(m*n)
+			for (var x=0; x<m; x++)	{
+				if (b[x+0*m])
+					g[x+0*m] = 0
+				else
+					g[x+0*m] = infinity
+				// Scan 1
+				for (var y=1; y<n; y++)	{
+					if (b[x+y*m])
+						g[x+y*m] = 0
+					else
+						g[x+y*m] = 1 + g[x+(y-1)*m]
+				}
+				// Scan 2
+				for (var y=n-1; y>= 0; y--)	{
+					if (g[x+(y+1)*m] < g[x+y*m])
+						g[x+y*m] = 1 + g[x+(y+1)*m]
+				}
+			}
+
+			// Euclidean
+			function EDT_f(x, i, g_i) {	
+				return (x-i)*(x-i) + g_i*g_i	
+			}
+			function EDT_Sep(i, u, g_i, g_u) {	
+				return Math.floor((u*u - i*i + g_u*g_u - g_i*g_i)/(2*(u-i)))	
+			}
+
+			// Manhattan
+			function MDT_f(x, i, g_i) {	
+				return Math.abs(x-i) + g_i		
+			}
+			function MDT_Sep(i, u, g_i, g_u) {
+				if (g_u >= (g_i + u - i))
+					return infinity
+				if (g_i > (g_u + u - i))
+					return -infinity
+				return Math.floor((g_u - g_i + u + i)/2)
+			}
+
+			// Chessboard
+			function CDT_f(x, i, g_i) {	
+				return Math.max(Math.abs(x-i), g_i)	
+			}
+			function CDT_Sep(i, u, g_i, g_u) {
+				if (g_i <= g_u)
+					return Math.max(i+g_u, Math.floor((i+u)/2))
+				else
+					return Math.min(u-g_i, Math.floor((i+u)/2))
+			}
+
+			// Second phase
+			var f	= eval(method + '_f')
+			var Sep	= eval(method + '_Sep')
+			var dt	= new Array(m*n)
+			var s	= new Array(m)
+			var t	= new Array(m)
+			var q	= 0
+			var w
+			for (var y=0; y<n; y++)	{
+				q = 0
+				s[0] = 0
+				t[0] = 0
+				
+				// Scan 3
+				for (var u=1; u<m; u++)	{
+					while (q >= 0 && f(t[q], s[q], g[s[q]+y*m]) > f(t[q], u, g[u+y*m]))
+						q--
+					if (q < 0)	{
+						q = 0
+						s[0] = u
+					}	else	{
+						w = 1 + Sep(s[q], u, g[s[q]+y*m], g[u+y*m])
+						if (w < m)	{
+							q++
+							s[q] = u
+							t[q] = w
+						}
+					}
+				}
+				// Scan 4
+				for (u=m-1; u>=0; u--)	{
+					var d = f(u, s[q], g[s[q]+y*m])
+					if (method == 'EDT')		
+						d = Math.floor(Math.sqrt(d))
+					dt[u+y*m] = d
+					if (u == t[q])
+						q--
+				}
+			}
+			return dt
+		}
+
+
+
+
+
+
+
+
+
+		//
+		// 
+		// UI
+		// 
+		// 
+		function	$(id)	{ return document.getElementById(id) }
+		HTMLCollection.prototype.forEach = NodeList.prototype.forEach = Array.prototype.forEach
+		Element.prototype.hashIdsByTagName = function(tagName) {
+			var hash	= {}
+			var els		= this.getElementsByTagName(tagName)
+			els.forEach( function (el) { if (el.id) hash[el.id] = el })
+			return hash
+		}
+
+		function	settingsToUI(settings, elt) {
+			var inputs = elt.hashIdsByTagName('INPUT')
+			for (var setting in settings) {
+				var input	= inputs['input-' + setting]
+				if (!input)
+//					throw ('No input for setting "' + setting + '"')
+					continue;
+					
+				var value	= settings[setting]
+				if (typeof value == 'boolean')
+					input.checked = value
+				else
+					input.value = value
+			}
+		}
+		function	setUIresponder(elt, fn)	{
+			var els = elt.getElementsByTagName('INPUT')
+			for (var i=0; i<els.length; i++)
+				els[i].onchange = fn
+		}
+
+		//
+		// Update settings after UI changed, then maybe update distance then display
+		//
+		var _isolineCyclingTimer = null
+		function	uiChanged(e, uiElement) {
+			var trigger	= e.srcElement || e.target
+			var setting = trigger.id.split('input-')[1]
+			var value	= trigger.type == 'checkbox' ? trigger.checked : Number(trigger.value)
+			
+			var settings= w.settings
+			settings[setting] = value
+
+			var inputs	= uiElement.hashIdsByTagName('INPUT')
+			
+			// Update brush size in bezel
+			if (trigger.id == 'input-brush-size') {
+				paintBrushInBezel(settings)
+				return
+			}
+
+			// Force stroke if stroke width change
+			if (trigger.id == 'input-stroke-width') {
+				inputs['input-stroke'].checked = true
+				settings['stroke'] = true
+			}
+			// Force isolines if width, offset, or cycle changed
+			if (trigger.id == 'input-isoline-width' || trigger.id == 'input-isoline-offset' || (trigger.id == 'input-isoline-cycle' && settings['isoline-cycle'])) {
+				inputs['input-isolines'].checked = true
+				settings.isolines = true
+			}
+			// Force kill cycle if isolines is off
+			if (trigger.id == 'input-isolines' && !settings.isolines) {
+				inputs['input-isoline-cycle'].checked = false
+				settings['isoline-cycle'] = false
+			}
+
+			// Start cycling
+			if (settings['isoline-cycle'] && !_isolineCyclingTimer) {
+				function cycle() {
+					var n	= inputs['input-isoline-offset']
+					var v	= parseInt(n.value)+3
+					var max	= parseInt($('input-isoline-offset').max)
+					if (v >= max)
+						v = v % max
+					settings['isoline-offset'] = n.value = v
+					_updateDistance(w)
+				}
+				clearInterval(_isolineCyclingTimer)
+				_isolineCyclingTimer = setInterval(cycle, 20)
+			}
+			// Stop cycling
+			if (_isolineCyclingTimer && !settings['isoline-cycle']) {
+				clearInterval(_isolineCyclingTimer)
+				_isolineCyclingTimer = null
+			}
+
+			// Draw
+			updateDistance(w, trigger.id == 'input-negative')
+		}
+		
+		//
+		// Distance update
+		//
+		function	_updateDistance(w, recomputeDistance) {
+			var canvas	= w.canvases[0]
+			var canvases= w.canvases
+			var isolines= isolinesFromSettings(w.settings)
+
+			var all = w.settings.method == 'all'
+			canvases[1].style.display = canvases[2].style.display = all ? '' : 'none'
+			var spans = $('distance').getElementsByTagName('SPAN')
+			spans.forEach(function (e) { e.style.display = all ? 'inline' : 'none' })
+			if (recomputeDistance) {
+				w.booleanImage = booleanImageFromCanvas($('imageCanvas'), settings.threshold, settings.negative)
+				if (all)		{
+					w.distance1		= distanceFromBooleanImage(w.booleanImage, canvases[0].width, canvases[0].height, 'EDT')
+					w.distance2		= distanceFromBooleanImage(w.booleanImage, canvases[1].width, canvases[1].height, 'MDT')
+					w.distance3		= distanceFromBooleanImage(w.booleanImage, canvases[2].width, canvases[2].height, 'CDT')
+				} else
+					w.distance = distanceFromBooleanImage(w.booleanImage, canvas.width, canvas.height, settings.method)					
+			}
+			if (w && (w.distance || w.distance1)) {
+				if (all)		{
+					settings.method = 'EDT'; paintDistanceInCanvas(w.distance1, canvases[0], isolines, settings)
+					settings.method = 'MDT'; paintDistanceInCanvas(w.distance2, canvases[1], isolines, settings)
+					settings.method = 'CDT'; paintDistanceInCanvas(w.distance3, canvases[2], isolines, settings)
+					settings.method = 'all'
+				} else
+					paintDistanceInCanvas(w.distance, canvas, isolines, settings)
+			}
+		}
+		var _updateDistanceTimeout
+		function	updateDistance(w, recomputeDistance) {
+			// Lets the UI finish, then update
+			clearInterval(_updateDistanceTimeout)
+			_updateDistanceTimeout = setTimeout(function () { _updateDistance(w, recomputeDistance) }, 0)
+		}
+
+		function	switchDistanceMethodTo(method) {
+			settings.method = method
+			updateDistance(w, true)
+		}
+		
+
+		// Paint image in canvas to then get image data with canvas.getContext('2d').getImageData(0, 0, m, n).data
+		function	paintImageInCanvas(img, canvas)	{
+			var context = canvas.getContext('2d')
+			if (!context)
+				throw 'paintImageInCanvas : no canvas context while painting ' + img
+
+			canvas.width	= img.offsetWidth
+			canvas.height	= img.offsetHeight
+			context.drawImage(img, 0, 0, canvas.width, canvas.height)
+		}
+		
+		//
+		// Distance painting - distances > 255 are clamped to 255
+		//
+		function	paintDistanceInCanvas(distance, canvas, isolines, settings) {
+			var m			= canvas.width
+			var n			= canvas.height
+			var canvasImage	= canvas.getContext('2d').getImageData(0, 0, m, n)
+			var data		= canvasImage.data
+
+			var strokeWidth	= settings.stroke ? settings['stroke-width'] : 0
+			var contrast	= settings.contrast/100
+			var isolineColor= settings.isolineColor 
+			var strokeColor	= settings.strokeColor
+			var distanceColor	= { r : settings.distanceColor.r*contrast/255, g : settings.distanceColor.g*contrast/255, b : settings.distanceColor.b*contrast/255 }
+			
+			// Convert to visible
+			var idx = 0
+			for (var y=0; y<n; y++)	{
+				for (var x=0; x<m; x++)	{
+					var d = distance[idx]
+					if (isolines[d] || (d && d <= strokeWidth))	{
+						if (isolines[d])
+							data[idx*4+0] = isolineColor.r, data[idx*4+1] = isolineColor.g, data[idx*4+2] = isolineColor.b
+						else
+							data[idx*4+0] = strokeColor.r, data[idx*4+1] = strokeColor.g, data[idx*4+2] = strokeColor.b
+					}
+					else
+						data[idx*4+0] = Math.min(255, d*distanceColor.r), data[idx*4+1] = Math.min(255, d*distanceColor.g), data[idx*4+2] = Math.min(255, d*distanceColor.b)
+
+					idx++		
+				}
+			}
+			canvas.getContext('2d').putImageData(canvasImage, 0, 0)
+			
+			// Reveal distance shape
+			if (settings.revealShape) {
+				var ctx = canvas.getContext('2d')
+				ctx.fillStyle	= 'rgba(255, 0, 0, 0.2)'
+				ctx.strokeStyle	= 'rgba(255, 0, 0, 1)'
+				var d = distance[settings.revealX+settings.revealY*canvas.width]
+				var x = settings.revealX
+				var y = settings.revealY
+				if (settings.method == 'EDT') {
+					ctx.beginPath() 
+					ctx.arc(x, y, d, 0, Math.PI*2, true)
+					ctx.closePath()
+					ctx.fill()
+					ctx.stroke()
+				}
+				if (settings.method == 'MDT') {
+					ctx.beginPath() 
+					ctx.moveTo(x, y-d)
+					ctx.lineTo(x+d, y)
+					ctx.lineTo(x, y+d)
+					ctx.lineTo(x-d, y)
+					ctx.lineTo(x, y-d)
+					ctx.closePath()
+					ctx.fill()
+					ctx.stroke()
+				}
+				if (settings.method == 'CDT') {
+					ctx.fillRect(x-d, y-d, d*2, d*2)
+					ctx.strokeRect(x-d, y-d, d*2, d*2)
+				}
+				// Crosshair
+				ctx.strokeRect(x-5, y, 10, 0)
+				ctx.strokeRect(x, y-5, 0, 10)
+			}
+		}
+		
+		//
+		// Isolines - lines of equal distance to foreground
+		//
+		function	isolinesFromSettings(settings) {
+			var isolines= []
+			var width	= settings['isoline-width']
+			var o		= parseInt(width*settings['isoline-offset']/100)
+			var n		= settings.isolines ? 500 : 0
+			// 0 is silhouette
+			for (var i=1; i<n; i++)
+				isolines[i] = ((i-o)%width) == 0 /*|| i <= strokeWidth*/ ? 1 : 0
+			isolines[0] = settings.silhouette ? 1 : 0
+			return isolines
+		}
+		
+		//
+		// Image loading
+		//
+		function	loadImageAndComputeDistance(imageURL, canvases, settings)	{
+			var sourceImage = $('sourceImage')
+			function	loadedImage() {
+				paintImageInCanvas(sourceImage, $('imageCanvas'))
+				paintImageInCanvas(sourceImage, canvases[0])
+				paintImageInCanvas(sourceImage, canvases[1])
+				paintImageInCanvas(sourceImage, canvases[2])					
+				canvases[1].style.display = canvases[2].style.display = settings.method == 'all' ? '' : 'none'
+				updateDistance(w, true)
+			}
+			sourceImage.onload	= loadedImage
+			sourceImage.src		= imageURL
+			var w = { imageURL : imageURL, canvases : canvases, settings : settings }
+			return w
+		}
+		
+		
+
+		//
+		// Thumbnails
+		//
+		function	_addImageToImages(img) {
+			var button = document.createElement('BUTTON')
+			$('images').appendChild(button)
+			button.onclick = function () { selectImage(img) }
+			button.appendChild(img)
+		}
+		function	makeThumbnailsFromImageList(images, onload) {
+			for (var i=0; i<images.length; i++)		{
+				var img = document.createElement('IMG')
+				img.src = 'images/' + images[i]
+				img.onload	= onload || null
+				_addImageToImages(img)
+			}
+		}
+
+		// Thumbnail selection
+		var _selectedImage
+		function	selectImage(s)	{
+			if (_selectedImage)
+				_selectedImage.parentNode.className = ''
+			_selectedImage = s
+			if (_selectedImage) {
+				_selectedImage.parentNode.className = 'selected'
+				w = loadImageAndComputeDistance(s.src, canvases, settings)
+			}
+		}
+
+
+
+		
+		//
+		// Drop : load an image from the hard drive
+		//
+		function	dropMessage() {
+			var str = 'Drop an image from your computer here.'
+			try {
+				new FileReader
+			} catch (e) {
+				str += '\n\n... but first upgrade your browser !\n(Error : FileReader not supported)\n\n' + navigator.userAgent
+			}
+			alert(str)
+		}
+		function drop(e) {
+			e = e || event
+			e.stopPropagation()
+			e.preventDefault()
+			var files = e.dataTransfer.files
+			for (var i=0; i<files.length; i++) {
+				var reader = new FileReader
+				reader.onload = function (file) {
+					if (!file.target.result.toString().match(/^data:image/))
+						return alert('Not an image.')
+					var img = document.createElement('IMG')
+					$('images').appendChild(img)
+					img.src = file.target.result
+					img.onload = function (e) {
+						var img = e.srcElement || e.target
+						_addImageToImages(img)
+						selectImage(img)
+						img.parentNode.focus()
+					}
+				}
+				reader.readAsDataURL(files[i])
+			}
+		}
+		
+		//
+		// Paint
+		//
+		function	drawStarBrush(ctx, branchCount, x, y, angle0, size1, size2) {
+			ctx.beginPath()
+			for (var i=0; i<=branchCount; i++) {
+				var size = i%2==0 ? size1 : size2
+				var a = 2*Math.PI*(i+angle0)/branchCount
+				var px = Math.cos(a)*size+x
+				var py = Math.sin(a)*size+y
+				if (!i)
+					ctx.moveTo(px, py)
+				else
+					ctx.lineTo(px, py)
+			}
+			ctx.closePath()	
+			ctx.fill()
+		}
+					
+		//
+		// Brushes palette and brush bezel
+		//
+		function	selectBrush(e) {
+			var trigger	= e.srcElement || e.target
+			if (trigger.nodeName != 'CANVAS')
+				return
+			settings['brush-name'] = trigger.id.split('brush-')[1]
+			paintBrushInBezel(settings)
+		}
+		function	paintBrushesInTable(table) {
+			var brushesTR = table.getElementsByTagName('TR')[0]
+			brushesTR.onclick = selectBrush
+			for (var brush in brushes) {
+				var td = document.createElement('TD')
+				td.innerHTML = '<canvas id="brush-' + brush + '" width="23" height="23"></canvas>'
+				var canvas = td.getElementsByTagName('canvas')[0]
+
+				var ctx = canvas.getContext('2d')
+				ctx.shadowOffsetX = 0
+				ctx.shadowOffsetY = 2
+				ctx.shadowBlur	= 4
+				ctx.shadowColor	= 'rgba(0, 0, 0, 0.6)'
+				ctx.fillStyle	= '#fff'
+				brushes[brush](canvas.getContext('2d'), canvas.width/2, canvas.height/2, canvas.width*Math.sqrt(2)/2)
+				brushesTR.appendChild(td)
+			}
+		}
+		
+		var	_brushTimeout, _brushTimeout2
+		function	paintBrushInBezel(settings) {
+			// Setup brush bezel
+			$('bezel').style.cssText = 'display: block; -webkit-transition: opacity 0s linear; opacity: 1'
+			$('brush-shape').width	= $('brush-shape').clientWidth
+			$('brush-shape').height	= $('brush-shape').clientHeight
+			var ctx = $('brush-shape').getContext('2d')
+			ctx.shadowOffsetX = 0
+			ctx.shadowOffsetY = 2
+			ctx.shadowBlur	= 10
+			ctx.shadowColor	= 'rgba(0, 0, 0, 0.6)'
+			ctx.fillStyle	= '#fff'
+
+			var ctx = $('brush-shape').getContext('2d')
+			ctx.clearRect(0, 0, 1000, 1000)
+			var name = settings['brush-name']
+			brushes[name](ctx, $('brush-shape').clientWidth/2, $('brush-shape').clientHeight/2, settings['brush-size'])
+			$('brush-name').innerHTML = name.substr(0, 1).toUpperCase() + name.substr(1)
+			
+			function	fade() {
+				$('bezel').style.cssText = '-webkit-transition: opacity 0.2s linear; display: block; opacity: 0'
+				function	fade2() {
+					$('bezel').style.display = 'none'
+				}
+				_brushTimeout2 = setTimeout(fade2, 300)
+			}
+			clearTimeout(_brushTimeout)
+			clearTimeout(_brushTimeout2)
+			_brushTimeout = setTimeout(fade, 800)
+		}
+		
+		//
+		// Draw the distance shape (EDT=circle, MDT=diamond, CDT=square)
+		//
+		function	maybeRevealShape(e) {
+			if (!w && (w.distance || w.distance1))
+				return
+			var prevRevealShape	= settings.revealShape
+			settings.revealShape= e.altKey
+			settings.revealX = mousemoveX
+			settings.revealY = mousemoveY
+			if (settings.revealShape || (prevRevealShape && !settings.revealShape))
+				updateDistance(w, false)
+		}
+
+		//
+		// Painting events
+		//
+		var painting	= false
+		$('distance').onmousedown = function (e) {
+			var trigger	= e.srcElement || e.target
+			if (trigger.nodeName != 'CANVAS')
+				return
+
+			painting = true
+			canvases[3].getContext('2d').fillStyle = e.shiftKey ? '#fff' : '#000'
+			brushes[settings['brush-name']](canvases[3].getContext('2d'), e.layerX, e.layerY, settings['brush-size'])
+			updateDistance(w, true)
+			e.preventDefault()
+		}
+		// keydown event gives mouse position as zero — save it in mousemove
+		var mousemoveX, mousemoveY
+		$('distance').onmousemove = function (e) {
+			mousemoveX = e.layerX
+			mousemoveY = e.layerY
+			if (!painting) {
+				maybeRevealShape(e)
+				return
+			}
+			brushes[settings['brush-name']](canvases[3].getContext('2d'), e.layerX, e.layerY, settings['brush-size'])
+			updateDistance(w, true)
+			e.preventDefault()
+		}
+		$('distance').onmouseup = function (e) {
+			painting = false
+		}
+		
+		document.body.onkeydown = document.body.onkeyup = maybeRevealShape
+		
+		//
+		// Start
+		// 
+		var brushes = { 
+						'circle'	: function (ctx, x, y, radius) { ctx.beginPath(); ctx.arc(x, y, radius/2, 0, Math.PI*2, true); ctx.closePath(); ctx.fill()  },
+						'diamond'	: function (ctx, x, y, radius) { drawStarBrush(ctx, 4, x, y, 0, radius*0.5, radius*0.5) },
+						'rectangle'	: function (ctx, x, y, radius) { ctx.fillRect(x-radius/2, y-radius/2, radius, radius) },
+						'star'		: function (ctx, x, y, radius) { drawStarBrush(ctx, 10, x, y, 1.5, radius*0.5, radius*0.2) },
+						'pentagon'	: function (ctx, x, y, radius) { drawStarBrush(ctx, 5, x, y, 0.75, radius*0.5, radius*0.5) },
+						'hexagon'	: function (ctx, x, y, radius) { drawStarBrush(ctx, 6, x, y, 0, radius*0.5, radius*0.5) },
+					 }
+		
+		var settings = { 	method : 'CDT',									// EDT = Euclidean Distance Transform, MDT = Manhattan, CDT = Chessboard
+							negative : false,								// Take negative from input image
+							threshold : 20,									// booleanImage.pixel = inputImage.pixel < threshold
+							silhouette : true,								// Display boolean image alongside distance
+							isolines : false,								// Display lines of equal distance alongside distance
+							'isoline-width' : 15,							
+							'isoline-offset' : 50,
+							'isoline-cycle' : false,
+							stroke : true,									// 2D stroke
+							'stroke-width' : 5,
+							contrast : 150,									// Distance contrast
+							isolineColor : { r : 255, g : 0, b : 0 },
+							strokeColor : { r : 192, g : 0, b : 0 },
+							distanceColor : { r : 255, g : 255, b : 255 },
+							'brush-size' : 40,
+							'brush-name' : 'star'
+						}
+
+		
+		var images = ['jubilee.png', 'circle.png', 'diamond.png', 'square.png', 'roundel.png', 
+			'heteroscedasticity.png', 'bahai.png', 'crosses.png', 'voronoi.png', 'font.png']
+
+		// Stores current distance and canvases
+		var w = null
+
+		paintBrushesInTable($('brushes-palette'))
+
+		makeThumbnailsFromImageList(['eagle.png'], function laoded() {
+			// Select this as first image
+			setTimeout(function () { $('images').getElementsByTagName('BUTTON')[0].click() }, 10)
+		})
+		makeThumbnailsFromImageList(images)
+		
+		var uiElement = $('ui-distance')
+		setUIresponder(uiElement, function (e) { uiChanged(e, uiElement) } )
+		settingsToUI(settings, uiElement)
+		var canvases = $('distance').getElementsByTagName('CANVAS')
+
+
+		
+		
+		
+	</script>
+	
+	
+	<div id='text'>
+		<h1>Meijster distance</h1> 
+		
+		<p>
+		<a href='http://dissertations.ub.rug.nl/FILES/faculties/science/2004/a.meijster/c2.pdf'>A General Algorithm for Computing Distance Transforms in Linear Time</a><br/>
+		The Meijster distance computes a distance field from a boolean image. A boolean image is made up of zeros and ones, where zero means background (empty space) and one foreground.
+		The resulting distance field is an image whose pixels store distance to foreground.
+		
+		<p>
+		A distance field can be used for stroking shapes, computing <a href='http://en.wikipedia.org/wiki/Voronoi_diagram'>Voronoi diagrams</a>, pathfinding,
+		or performing <a href='http://en.wikipedia.org/wiki/Mathematical_morphology'>mathematical morphology</a> operators.
+		The distance field changes depending on the distance function used. Each distance function uses a different shape to compute distance, 
+ 		hold down option <b>⌥</b> to reveal it.
+
+		<br/><br/><br/>
+		<p>
+		<img src='doc/Euclidean%20distance%20transform.png'><br/>
+		<b><a href='http://en.wikipedia.org/wiki/Euclidean_distance'>Euclidean distance</a></b><br>
+		This is the most commonly used distance function.
+		Given a distance field (x,y) and an image (i,j) the distance field stores the euclidean distance : <code>sqrt((x-i)<sup>2</sup>+(y-j)<sup>2</sup>)</code>
+		<p>
+		Pick a point on the distance field, draw a circle using that point as center and the distance field value as radius. The circle will hit the closest foreground point.
+
+		<br/><br/><br/>
+		<p>
+		<img src='doc/Manhattan%20distance%20transform.png'><br/>
+		<b><a href='http://en.wikipedia.org/wiki/Manhattan_distance'>Manhattan distance</a> (Taxicab geometry)</b><br>
+		The distance field stores the Manhattan distance : <code>abs(x-i)+abs(y-j)</code>
+		<p>
+		Pick a point on the distance field, draw a diamond (rhombus) using that point as center and the distance field value as radius. The diamond will hit the closest foreground point.
+		
+		<br/><br/><br/>
+		<p>
+		<img src='doc/Chessboard%20distance%20transform.png'><br/>
+		<b><a href='http://en.wikipedia.org/wiki/Chessboard_distance'>Chessboard distance</a> (Chebyshev)</b><br>
+		The distance field stores the chessboard distance : <code>max(abs(x-i),abs(y-j))</code>
+		<p>
+		Pick a point on the distance field, draw a square using that point as center and the double distance field value as edge length. The square will hit the closest foreground point.
+		
+
+
+		<h2>Painting</h2>
+		Left mouse button to paint, shift+left mouse button to clear.
+		<p>
+		<b>Brushes</b><br>
+		Use each brush with its matching transform to recreate the pictures above.
+		<ul>
+			<li><b>Circle</b> matches <b>Euclidean</b></li>
+			<li><b>Diamond</b> matches <b>Manhattan</b></li>
+			<li><b>Rectangle</b> matches <b>Chessboard</b></li>
+		</ul>
+	
+		<p>
+		<img src='doc/Voronoi%20from%20Euclidean%20distance.png'><br/>
+		Using the Euclidean distance, paint points with a small brush and up contrast to get <a href='http://en.wikipedia.org/wiki/Voronoi_diagram'>Voronoi</a> lookalikes.
+
+
+		<h2>Image credits</h2>
+		<ul>
+			<li><a href='http://webclipart.about.com/library/May/blsilh19.htm'>Eagle and stars</a> by Bobbie Peachey</li>
+			<li><a href='http://www.clipartpal.com/clipart_pd/education/school_11202.html'>Wreath</a> from ClipartPal</li>
+			<li>Others from Wikipedia</li>
+		</ul>
+		<h2>Code</h2>
+		Source is on <a href='https://github.com/parmanoir/Meijster-distance'>Github</a>.<br />
+
+		<a id='home' href='http://parmanoir.com'>PARMANOIR</a>
+	
+	</div>
+</body>
+</html>
